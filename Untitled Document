@@ -1,0 +1,70 @@
+func TCApproveAPI(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	TcId := vars["tcID"]
+	ApprovalStatus := vars["ApprovalStatus"]
+	AssignedNextUser := vars["AssignedNextUser"]
+	tcwID := vars["tcwID"]
+	fmt.Println("inside handler", AssignedNextUser, ApprovalStatus, TcId, tcwID)
+	jwtClaims := shared.GetJWTClaims(r)
+	role := jwtClaims.Role
+	username := jwtClaims.UserName
+	fmt.Println("Role in main Handler", role)
+	var tcbody model.TC
+	if err := json.NewDecoder(r.Body).Decode(&tcbody); err != nil {
+		logger.Error(err, " Invalid Payload or Missing Payload")
+		response.With400(w, err.Error())
+		return
+	}
+	defer r.Body.Close()
+
+	query := bson.M{"status": ApprovalStatus, "tcId": TcId, "assignedNextUserRole": constant.DESKTOPASSESSOR}
+	data, _ := dal.TcWorkflowFindAllBasedOnBson(query)
+	if len(data) > 0 {
+		response.With412m(w, "already assigned")
+		return
+	}
+	where := bson.M{"userName": TcId}
+	fmt.Println("jobRoles", tcbody.JobRoles)
+	err := dal.TCUpdateObject(where, tcbody)
+	if err != nil {
+		fmt.Println("err", err)
+		response.With400(w, err.Error())
+		return
+	}
+
+	defer r.Body.Close()
+
+	msg, err := service.TCWorkflowIAToDA(TcId, tcwID, ApprovalStatus, AssignedNextUser, constant.DESKTOPASSESSOR, username, role)
+	if err != nil {
+		response.With400(w, err.Error())
+		return
+	}
+
+	response.With200m(w, msg)
+}
+
+
+//TcWorkflowFindAll : "get all notification as per query"
+func TcWorkflowFindAllBasedOnBson(q bson.M) ([]*model.TCWorkflow, error) {
+	db := mongo.GetDB()
+	defer db.Session.Close()
+	var tws []*model.TCWorkflow
+	err := db.C(model.CollectionTCWorkflow).Find(q).All(&tws)
+	return tws, err
+}
+
+// TCUpdateObject : ""
+func TCUpdateObject(q bson.M, data model.TC) error {
+	db := mongo.GetDB()
+	defer db.Session.Close()
+	if data.TcMobileAppValue == "No" {
+		return db.C(model.CollectionTC).Update(q, bson.M{"$set": bson.M{"tcmobileappstatus": false, "updated_At": time.Now()}})
+	} else if data.TcMobileAppValue == "Yes" {
+		data.TcMobileAppstatus = true
+		data.UpdatedAT = time.Now()
+	}
+	return db.C(model.CollectionTC).Update(q, bson.M{"$set": data})
+}
+
+
+
